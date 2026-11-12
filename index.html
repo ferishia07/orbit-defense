@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="An endless arcade space shooter with a persistent high-score board.">
+<title>Orbit Defense</title>
+<style>
+:root{color-scheme:dark;--sky:#0a1120;--panel:#101c2d;--line:#2a3c54;--text:#edf6ff;--muted:#a9bed4;--cyan:#70f0e1;--gold:#ffca76}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 20% 0%,#203050,transparent 57%),var(--sky);color:var(--text);font-family:Inter,system-ui,sans-serif}
+main{max-width:1100px;margin:auto;padding:24px clamp(14px,4vw,42px)}header,.hud,.controls,.sidehead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+header{padding-bottom:15px;border-bottom:1px solid var(--line)}.brand,.hud,.status,.rank,.points{font:700 13px Consolas,monospace}.brand{letter-spacing:.14em}.brand b{color:var(--cyan);font-size:21px;margin-right:7px}
+.intro{margin:22px 0 16px;display:flex;align-items:end;justify-content:space-between;gap:15px}h1{font-size:clamp(47px,8vw,86px);letter-spacing:-.085em;line-height:.9;margin:0}h1 span{color:var(--cyan)}.intro p{margin:0;max-width:32ch;color:var(--muted);line-height:1.5}
+.layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(245px,1fr);gap:14px;align-items:start}.panel{border:1px solid var(--line);border-radius:13px;background:var(--panel);padding:clamp(10px,2vw,17px)}
+.hud{color:var(--cyan);margin-bottom:10px;flex-wrap:wrap}.scene{position:relative;background:#070d1c;border:1px solid #2a405e;border-radius:8px;overflow:hidden}
+canvas{display:block;width:100%;aspect-ratio:4/3;touch-action:none}.overlay{position:absolute;inset:0;display:grid;place-items:center;background:#080e1cc4;padding:10px;overflow:auto}.overlay[hidden],form[hidden]{display:none}
+.card{width:min(100%,335px);text-align:center;padding:clamp(10px,2vw,20px);background:#121f34;border:1px solid #42597a;border-radius:10px}.card h2{margin:0;font-size:clamp(19px,4vw,32px);letter-spacing:-.04em}.card p{color:var(--muted);margin:7px 0 12px;font-size:13px}
+button,input{font:700 13px Inter,system-ui,sans-serif;border:1px solid var(--line);border-radius:6px;padding:8px 11px;background:#1b2b45;color:var(--text)}button{cursor:pointer;touch-action:manipulation}button:hover:enabled{filter:brightness(1.2)}button:disabled{opacity:.6}button:focus-visible,input:focus-visible,canvas:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+.primary{background:var(--cyan);color:#072323;border-color:var(--cyan)}.controls{margin-top:10px;flex-wrap:wrap}.pad{display:flex;gap:5px}.pad button{touch-action:none;min-width:41px}.status{color:var(--muted);font-size:11px}.sidehead h2{margin:0;font-size:20px}.sidehead small{color:var(--muted);font-size:11px}ol{list-style:none;padding:0;margin:12px 0 0}.entry{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 2px;border-top:1px solid var(--line);font-size:13px}.pilot{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rank{color:var(--muted)}.points{color:var(--gold)}.empty{color:var(--muted);font-size:13px;padding:10px 0}
+form{display:flex;gap:5px;margin-bottom:8px}input{min-width:0;flex:1}#saveStatus{min-height:1em;margin:5px 0 8px;color:var(--gold)}
+@media(max-width:690px){.layout{grid-template-columns:1fr}.intro{display:block}.intro p{margin-top:9px}}
+</style>
+<main>
+<header><div class="brand"><b aria-hidden="true">✦</b> ORBIT DEFENSE</div><button id="pause" type="button" disabled>Pause</button></header>
+<div class="intro"><h1>Orbit Defense<span>.</span></h1><p>Hold the line against incoming ships and put your high score on the board.</p></div>
+<div class="layout">
+<section class="panel" aria-label="Space shooter">
+<div class="hud"><span id="score">SCORE 0</span><span id="wave">WAVE 1</span><span id="shield">SHIELD 3 / 3</span></div>
+<div class="scene">
+<canvas id="scene" width="640" height="480" tabindex="0" aria-label="Space shooter play area. Move with A and D or arrow keys and shoot with Space."></canvas>
+<div class="overlay" id="overlay"><div class="card">
+<h2 id="title">Defend the station</h2><p id="detail">Shoot incoming ships before they breach the defense line.</p>
+<form id="save" hidden><input id="pilot" aria-label="Pilot name" placeholder="Pilot name" maxlength="16" required><button type="submit" id="saveButton">Save score</button></form>
+<p class="status" id="saveStatus" role="status" hidden></p>
+<button type="button" class="primary" id="play">Launch</button>
+</div></div>
+</div>
+<div class="controls"><span class="status">A / D or arrows to move · Space to fire · P to pause</span><div class="pad" aria-label="Touch controls"><button data-control="left" aria-label="Move left">←</button><button data-control="right" aria-label="Move right">→</button><button data-control="fire">Fire</button></div></div>
+</section>
+<section class="panel" aria-label="High scores">
+<div class="sidehead"><h2>Leaderboard</h2><small id="boardMode">Loading…</small></div>
+<ol id="ranks"></ol>
+</section>
+</div>
+</main>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const canvas = byId("scene");
+const ctx = canvas.getContext("2d");
+const width = canvas.width;
+const height = canvas.height;
+const line = 432;
+const held = new Set();
+const touches = new Map();
+const controls = new Map(Object.entries({ ArrowLeft:"left", a:"left", ArrowRight:"right", d:"right", " ":"fire" }));
+const stars = Array.from({length:96}, (_,i) => [(i*137+13)%width,(i*181+27)%height,1+i%3]);
+const offline = location.protocol === "file:";
+const storageKey = "orbit-defense-scores-v1";
+let state = "ready";
+let player, enemies, bullets, sparks, score, wave, shield, kills, timer, fireDelay, runId;
+let lastTime = 0;
+let localScores = [];
+let saving = false;
+const random = (min,max) => min+Math.random()*(max-min);
+const displayScore = n => n.toLocaleString("en-US");
+
+function hud() {
+  byId("score").textContent = "SCORE " + displayScore(score);
+  byId("wave").textContent = "WAVE " + wave;
+  byId("shield").textContent = "SHIELD " + shield + " / 3";
+}
+
+function reset() {
+  player = {x:width/2,y:452};
+  enemies = [];
+  bullets = [];
+  sparks = [];
+  score = kills = 0;
+  wave = 1;
+  shield = 3;
+  timer = .55;
+  fireDelay = 0;
+  runId = globalThis.crypto?.randomUUID?.() ?? Date.now()+"-"+Math.random().toString(36).slice(2);
+  hud();
+}
+
+function setState(next) {
+  state = next;
+  held.clear();
+  touches.clear();
+  byId("overlay").hidden = state === "playing";
+  byId("pause").disabled = state !== "playing" && state !== "paused";
+  byId("pause").textContent = state === "paused" ? "Resume" : "Pause";
+  if (state === "playing") {
+    byId("save").hidden = true;
+    byId("saveStatus").hidden = true;
+    canvas.focus();
+  }
+}
+
+function togglePause() {
+  if (state === "paused") { setState("playing"); return; }
+  if (state !== "playing") return;
+  byId("title").textContent = "Paused";
+  byId("detail").textContent = "Your run is on hold.";
+  byId("play").textContent = "Resume";
+  setState("paused");
+  byId("play").focus();
+}
+
+function finish() {
+  byId("title").textContent = "Run complete";
+  byId("detail").textContent = displayScore(score) + " points · Wave " + wave;
+  byId("play").textContent = "Play again";
+  byId("save").hidden = score === 0;
+  byId("saveStatus").hidden = true;
+  byId("saveButton").disabled = false;
+  setState("over");
+  (score ? byId("pilot") : byId("play")).focus();
+}
+
+function burst(x,y,color) {
+  for (let i=0;i<10;i++) sparks.push({x,y,dx:random(-96,96),dy:random(-96,96),life:random(.16,.45),color});
+}
+
+function spawn() {
+  const armored = wave > 1 && Math.random() < .25;
+  const x = random(40,width-40);
+  enemies.push({x,origin:x,y:-18,t:0,phase:random(0,6.28),hp:armored?2:1,armored});
+}
+
+function update(dt) {
+  const active = new Set([...Array.from(held,key => controls.get(key)),...touches.values()]);
+  const dx = Number(active.has("right"))-Number(active.has("left"));
+  player.x = Math.max(17,Math.min(width-17,player.x+dx*340*dt));
+  fireDelay -= dt;
+  if (active.has("fire") && fireDelay <= 0) {
+    bullets.push({x:player.x,y:player.y-16});
+    fireDelay = .14;
+  }
+  timer -= dt;
+  if (timer <= 0) {
+    spawn();
+    timer = Math.max(.25, .92-wave*.065);
+  }
+  for (const enemy of enemies) {
+    enemy.t += dt;
+    enemy.y += Math.min(205,60+wave*12+(enemy.armored?-10:0))*dt;
+    enemy.x = enemy.origin + Math.sin(enemy.t*2.8+enemy.phase)*25;
+  }
+  for (const bullet of bullets) {
+    bullet.y -= 510*dt;
+    const hit = enemies.find(enemy => enemy.hp > 0 && Math.abs(bullet.x-enemy.x)<16 && Math.abs(bullet.y-enemy.y)<14);
+    if (!hit) continue;
+    bullet.y = -30;
+    hit.hp--;
+    burst(hit.x,hit.y,hit.hp ? "#ffca76" : "#f984a6");
+    if (hit.hp === 0) {
+      score += hit.armored ? 200 : 100;
+      kills++;
+      wave = 1 + Math.floor(kills/12);
+      hud();
+    }
+  }
+  bullets = bullets.filter(bullet => bullet.y > -20);
+  enemies = enemies.filter(enemy => {
+    if (!enemy.hp) return false;
+    if (enemy.y < line) return true;
+    shield = Math.max(0,shield-1);
+    burst(enemy.x,line,"#70f0e1");
+    hud();
+    return false;
+  });
+  sparks = sparks.filter(spark => {
+    spark.life -= dt;
+    spark.x += spark.dx*dt;
+    spark.y += spark.dy*dt;
+    return spark.life > 0;
+  });
+  if (shield === 0) finish();
+}
+
+function rect(x,y,w,h,color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x),Math.round(y),w,h);
+}
+
+function draw(time) {
+  rect(0,0,width,height,"#091225");
+  for (const [x,y,size] of stars) rect(x,(y+time*(.014+size*.011))%height,size,size,size===3?"#758aad":"#2c4060");
+  for (let x=0;x<width;x+=24) rect(x,line,13,1,"#386982");
+  for (const bullet of bullets) {
+    rect(bullet.x-1,bullet.y-9,3,13,"#70f0e1");
+    rect(bullet.x,bullet.y-9,1,5,"#fff4d5");
+  }
+  for (const enemy of enemies) {
+    const {x,y,armored} = enemy;
+    rect(x-16,y-5,32,10,armored?"#d59556":"#b85586");
+    rect(x-10,y-9,20,18,armored?"#fbc37b":"#fa8daf");
+    rect(x-4,y-5,8,10,"#593057");
+    rect(x-11,y+5,4,6,"#ffcc93");
+    rect(x+7,y+5,4,6,"#ffcc93");
+  }
+  const {x,y} = player;
+  rect(x-4,y-15,8,25,"#d0fff8");
+  rect(x-9,y-8,18,18,"#70f0e1");
+  rect(x-16,y,32,8,"#51a7c6");
+  rect(x-4,y-6,8,7,"#287087");
+  rect(x-4,y+10,8,4+Math.floor(time/65)%6,"#ffca76");
+  for (const spark of sparks) rect(spark.x,spark.y,2,2,spark.color);
+}
+
+function frame(time) {
+  const dt = Math.min((time-lastTime)/1000,.032);
+  lastTime = time;
+  if (state === "playing") update(dt);
+  draw(time);
+  requestAnimationFrame(frame);
+}
+
+function readLocal() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+    if (Array.isArray(entries)) localScores = entries.filter(row =>
+      row && typeof row.name === "string" && Number.isSafeInteger(row.score));
+  } catch { /* Keep the current session's scores. */ }
+  return localScores;
+}
+
+function renderScores(rows,mode) {
+  byId("boardMode").textContent = mode;
+  const entries = rows.map(({name,score},index) => {
+    const item = document.createElement("li");
+    item.className = "entry";
+    for (const [className,textContent] of [["rank",String(index+1).padStart(2,"0")],["pilot",name],["points",displayScore(score)]]) {
+      item.append(Object.assign(document.createElement("span"),{className,textContent}));
+    }
+    return item;
+  });
+  if (!entries.length) entries.push(Object.assign(document.createElement("li"),{className:"empty",textContent:"No scores yet. Fly a run to set the first record."}));
+  byId("ranks").replaceChildren(...entries);
+}
+
+async function loadScores() {
+  if (offline) { renderScores(readLocal(),"This browser"); return; }
+  try {
+    const response = await fetch("/api/scores",{cache:"no-store"});
+    if (!response.ok) throw new Error("Could not load scores");
+    renderScores(await response.json(),"Shared scores");
+  } catch {
+    byId("boardMode").textContent = "Unavailable";
+    byId("ranks").replaceChildren(Object.assign(document.createElement("li"),{
+      className:"empty",textContent:"Scores are temporarily unavailable."
+    }));
+  }
+}
+
+byId("save").addEventListener("submit",async event => {
+  event.preventDefault();
+  if (state !== "over" || saving || byId("saveButton").disabled) return;
+  const name = byId("pilot").value.trim();
+  const feedback = byId("saveStatus");
+  feedback.hidden = false;
+  if (!name) { feedback.textContent = "Enter a pilot name."; return; }
+  const entry = {id:runId,name,score,wave,kills};
+  saving = true;
+  byId("saveButton").disabled = true;
+  byId("play").disabled = true;
+  feedback.textContent = "Saving…";
+  try {
+    if (offline) {
+      localScores = [...readLocal(),entry].sort((a,b)=>b.score-a.score).slice(0,10);
+      try {
+        localStorage.setItem(storageKey,JSON.stringify(localScores));
+        feedback.textContent = "Score saved in this browser.";
+      } catch {
+        feedback.textContent = "Score kept for this session.";
+      }
+      renderScores(localScores,"This browser");
+    } else {
+      const response = await fetch("/api/scores",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(entry)});
+      if (!response.ok) throw new Error("Could not save score");
+      renderScores(await response.json(),"Shared scores");
+      feedback.textContent = "Score recorded.";
+    }
+    byId("save").hidden = true;
+    byId("play").disabled = false;
+    byId("play").focus();
+  } catch {
+    feedback.textContent = "Could not save. Try again.";
+    byId("saveButton").disabled = false;
+  } finally {
+    saving = false;
+    byId("play").disabled = false;
+  }
+});
+
+function inputKey(event) {
+  return event.key.length === 1 ? event.key.toLowerCase() : event.key;
+}
+window.addEventListener("keydown",event => {
+  const key = inputKey(event);
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if ((key === "p" || key === "Escape") && !event.repeat && (state === "playing" || state === "paused")) {
+    event.preventDefault();
+    togglePause();
+    return;
+  }
+  if (state !== "playing" || !controls.has(key) || event.target instanceof HTMLButtonElement) return;
+  event.preventDefault();
+  held.add(key);
+});
+window.addEventListener("keyup",event => held.delete(inputKey(event)));
+window.addEventListener("blur",() => { if (state === "playing") togglePause(); });
+document.querySelectorAll("[data-control]").forEach(button => {
+  button.addEventListener("pointerdown",event => {
+    if (state !== "playing" || event.button !== 0) return;
+    event.preventDefault();
+    button.setPointerCapture(event.pointerId);
+    touches.set(event.pointerId,button.dataset.control);
+  });
+  for (const type of ["pointerup","pointercancel","lostpointercapture"]) {
+    button.addEventListener(type,event => touches.delete(event.pointerId));
+  }
+});
+byId("play").addEventListener("click",() => {
+  if (state !== "paused") reset();
+  setState("playing");
+});
+byId("pause").addEventListener("click",togglePause);
+reset();
+loadScores();
+requestAnimationFrame(frame);
+</script>
+</html>
